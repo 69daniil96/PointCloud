@@ -1,0 +1,112 @@
+# Глобальные настройки проекта обработки облаков точек
+project:
+  name: "PointCloud Processing Pipeline"
+  version: "1.0.0"
+  description: "Унифицированный конвейер для обработки фотограмметрии с дронов и наземной съемки"
+
+paths:
+  data_root: "./data"
+  input_dir: "./data/input"
+  output_dir: "./data/output"
+  temp_dir: "./data/temp"
+  logs_dir: "./data/logs"
+
+# Настройки COLMAP (для наземной съемки)
+colmap:
+  enabled: true
+  # Путь к исполняемому файлу (автоматически определяется на Windows)
+  executable: "colmap.exe"
+  
+  # Параметры реконструкции
+  feature_extraction:
+    camera_model: "SIMPLE_RADIAL"
+    single_camera: false
+    
+  matching:
+    guided_matching: true
+    
+  reconstruction:
+    num_threads: 4
+
+# Настройки ODM (для съемки с дронов)
+odm:
+  enabled: true
+  docker_image: "opendronemap/odm:latest"
+  # Убедитесь, что Docker запущен!
+  docker_container_name: "odm_processor"
+  
+  # Параметры обработки
+  processing:
+    min_num_features: 4000
+    feature_quality: "high"  # низкое, среднее, высокое, ультра
+    matcher_distance: 0
+
+# Настройки PDAL (фильтрация облаков точек)
+pdal:
+  enabled: true
+  
+  filters:
+    outlier_removal:
+      method: "statistical"  # или "radius"
+      params:
+        mean_k: 8  # для statistical
+        std_dev_threshold: 2.0
+        
+    ground_removal:
+      enabled: true
+      # PDAL фильтр классификации по высоте
+      height_threshold: 0.5  # метры
+      # Если true, используется SMRF-классификация и выделяются слои ground/vegetation.
+      use_smrf_classification: true
+
+    # Параметры SMRF-классификации земли (PDAL filters.smrf)
+    ground_classification:
+      slope: 0.2
+      window: 16.0
+      threshold: 0.45
+      scalar: 1.25
+      
+    voxel_downsampling:
+      enabled: true
+      voxel_size: 0.05  # метры
+
+# Настройки Open3D (визуализация и обработка)
+open3d:
+  enabled: true
+  
+  processing:
+    voxel_size: 0.05
+    normals:
+      radius_normal: 0.1
+      max_nn: 30
+      
+    registration:
+      method: "icp"  # или "coloredicp", "fmr"
+      max_iteration: 50
+      threshold: 0.02
+      
+  visualization:
+    point_size: 2.0
+    background_color: [0.0, 0.0, 0.0]
+    show_coordinate_frame: true
+
+# Логирование
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file_output: true
+  log_file: "./data/logs/app.log"
+
+# Параметры конвейера
+pipeline:
+  # Какие этапы включать
+  stages:
+    reconstruction: true    # COLMAP или ODM
+    post_processing: true   # PDAL
+    visualization: true     # Open3D
+    
+  # Сохранять ли промежуточные файлы
+  save_intermediate: true
+  
+  # Автоматически очищать temp директорию после успешной обработки
+  cleanup_temp: false
