@@ -18,6 +18,81 @@
 - Docker Desktop должен быть запущен (Engine running).
 - Не задавайте `DOCKER_HOST=unix:///var/run/docker.sock` в `.env` (это Linux-сокет и он ломает запуск Docker CLI в Windows).
 
+## Установка инструментов и загрузка проекта
+
+### 1. Как скачать проект с GitHub
+
+Вариант A (рекомендуется, через Git):
+
+```bash
+git clone https://github.com/69daniil96/PointCloud.git
+cd PointCloud
+```
+
+Вариант B (без Git):
+- Откройте страницу репозитория в браузере: https://github.com/69daniil96/PointCloud
+- Нажмите Code -> Download ZIP
+- Распакуйте архив, например в `C:\PointCloud`
+
+### 2. Как скачать и установить Anaconda3
+
+- Сайт Anaconda: https://www.anaconda.com/download
+- Скачайте Anaconda3 для Windows (64-bit) и установите с настройками по умолчанию.
+- После установки откройте Anaconda Prompt и проверьте:
+
+```bash
+conda --version
+```
+
+### 3. Как скачать и установить Docker Desktop
+
+- Страница загрузки Docker Desktop: https://www.docker.com/products/docker-desktop/
+- Скачайте Docker Desktop для Windows и установите.
+- Запустите Docker Desktop и дождитесь статуса Engine running.
+- Проверьте в терминале:
+
+```bash
+docker --version
+docker ps
+```
+
+### 4. Как скачать контейнер (образ) ODM
+
+После установки Docker Desktop выполните:
+
+```bash
+docker pull opendronemap/odm:latest
+```
+
+Проверить, что образ скачан:
+
+```bash
+docker images | findstr opendronemap/odm
+```
+
+### 5. Как запустить контейнер ODM вручную
+
+Из корня проекта `PointCloud` выполните:
+
+```bash
+docker run --rm -v "${PWD}\data\output\drone\odm:/datasets" -v "${PWD}\data\input\drone:/datasets/code/images" opendronemap/odm:latest --project-path /datasets code
+```
+
+Что делает эта команда:
+- монтирует выходную папку в `/datasets`
+- монтирует входные фото в `/datasets/code/images`
+- запускает ODM на датасете `code`
+
+Результаты будут в папке:
+- `data/output/drone/odm/code`
+
+Рекомендуемый вариант для этого проекта:
+- запускать ODM через CLI проекта (он сам формирует корректную команду Docker):
+
+```bash
+python -m src.ui.cli process-drone data/input/drone --pull-docker-image
+```
+
 ## Быстрый запуск с нуля
 
 ### 1. Создать и активировать окружение
