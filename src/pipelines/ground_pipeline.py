@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from .base_pipeline import BasePipeline
-from src.adapters import ColmapRunner, PDALProcessor, Open3DProcessor
+from src.adapters import ColmapRunner, PDALProcessor, Open3DProcessor, ContourGenerator
 from src.core import get_config, get_path_manager
 
 
@@ -29,6 +29,7 @@ class GroundPipeline(BasePipeline):
         
         self.colmap = ColmapRunner()
         self.pdal = PDALProcessor()
+        self.contours = ContourGenerator()
         self.open3d = Open3DProcessor()
     
     def execute(
@@ -131,8 +132,31 @@ class GroundPipeline(BasePipeline):
             current_cloud = colmap_ply
             pdal_layers = {}
         
-        # Этап 3: Open3D обработка и сохранение
-        self.logger.info("\n=== Этап 3: Open3D Обработка ===")
+        # Этап 3: Построение изолиний
+        self.logger.info("\n=== Этап 3: Построение изолиний ===")
+
+        contours_file = None
+        config = get_config()
+        if config.get("contours.enabled", True):
+            contour_start = time.time()
+            contours_output_dir = self.output_dir / "contours"
+            contours_output_dir.mkdir(parents=True, exist_ok=True)
+            contours_file = contours_output_dir / f"{Path(current_cloud).stem}_contours.json"
+
+            # По запросу: для ground используем псевдо-случайную геопривязку.
+            if self.contours.generate_from_point_cloud(
+                input_file=current_cloud,
+                output_file=contours_file,
+                apply_random_georef=True,
+            ):
+                contour_duration = time.time() - contour_start
+                self.log_stage("Contour Generation", True, contour_duration)
+            else:
+                self.logger.warning("Построение изолиний пропущено")
+                contours_file = None
+
+        # Этап 4: Open3D обработка и сохранение
+        self.logger.info("\n=== Этап 4: Open3D Обработка ===")
         
         if self.open3d.is_available():
             open3d_start = time.time()
@@ -155,6 +179,7 @@ class GroundPipeline(BasePipeline):
                         "outliers": pdal_layers.get("outliers"),
                         "no_ground": pdal_layers.get("no_ground"),
                         "no_outliers": pdal_layers.get("no_outliers"),
+                        "contours": contours_file,
                     }
                     self.open3d.visualize_layers(
                         layer_files=layer_files,

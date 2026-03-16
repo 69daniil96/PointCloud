@@ -18,13 +18,14 @@ AVAILABLE_LAYERS = [
     'outliers',
     'no_ground',
     'no_outliers',
+    'contours',
 ]
 
 LAYER_PRESETS = {
-    'terrain': ['final', 'ground'],
-    'vegetation': ['final', 'vegetation', 'ground'],
-    'quality-control': ['final', 'outliers', 'no_ground', 'no_outliers'],
-    'all': ['final', 'ground', 'vegetation', 'outliers', 'no_ground', 'no_outliers'],
+    'terrain': ['final', 'ground', 'contours'],
+    'vegetation': ['final', 'vegetation', 'ground', 'contours'],
+    'quality-control': ['final', 'outliers', 'no_ground', 'no_outliers', 'contours'],
+    'all': ['final', 'ground', 'vegetation', 'outliers', 'no_ground', 'no_outliers', 'contours'],
 }
 
 
@@ -92,7 +93,7 @@ def cli():
     help=(
         'Явный список слоев для старта визуализации через запятую '
         '(переопределяет --layers-preset): '
-        'final, ground, vegetation, outliers, no_ground, no_outliers'
+        'final, ground, vegetation, outliers, no_ground, no_outliers, contours'
     )
 )
 @click.option(
@@ -187,7 +188,7 @@ def process_ground(image_dir, output_dir, no_visualization, save_intermediate, l
     help=(
         'Явный список слоев для старта визуализации через запятую '
         '(переопределяет --layers-preset): '
-        'final, ground, vegetation, outliers, no_ground, no_outliers'
+        'final, ground, vegetation, outliers, no_ground, no_outliers, contours'
     )
 )
 @click.option(

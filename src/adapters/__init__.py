@@ -7,6 +7,7 @@ from .colmap_runner import ColmapRunner
 from .odm_runner import ODMRunner
 from .pdal_processor import PDALProcessor
 from .open3d_processor import Open3DProcessor
+from .contour_generator import ContourGenerator
 
 __all__ = [
     'BaseAdapter',
@@ -14,4 +15,5 @@ __all__ = [
     'ODMRunner',
     'PDALProcessor',
     'Open3DProcessor',
+    'ContourGenerator',
 ]

@@ -2,6 +2,7 @@
 Адаптер для Open3D - визуализации и обработки облаков точек.
 """
 
+import json
 import numpy as np
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
@@ -96,6 +97,133 @@ class Open3DProcessor(BaseAdapter):
             f"Неподдерживаемый формат: {suffix}. Поддерживаются: .ply, .pcd, .las, .laz"
         )
         return None
+
+    def _elevation_to_color(self, z_value: float, z_min: float, z_max: float) -> List[float]:
+        """Преобразует высоту в цвет: низины (синий) -> средние (зеленый) -> вершины (красный)."""
+        if np.isclose(z_max, z_min):
+            return [0.2, 0.75, 0.3]
+
+        t = float((z_value - z_min) / (z_max - z_min))
+        t = float(np.clip(t, 0.0, 1.0))
+
+        if t < 0.5:
+            # Blue -> Green
+            a = t / 0.5
+            return [0.1 * (1 - a) + 0.2 * a, 0.35 * (1 - a) + 0.8 * a, 0.9 * (1 - a) + 0.2 * a]
+
+        # Green -> Red
+        a = (t - 0.5) / 0.5
+        return [0.2 * (1 - a) + 0.9 * a, 0.8 * (1 - a) + 0.2 * a, 0.2 * (1 - a) + 0.1 * a]
+
+    def _read_contours_lineset(self, file_path: Path, relief_coloring: bool = True):
+        """Читает JSON изолиний и возвращает Open3D LineSet."""
+        file_path = Path(file_path)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            segments = data.get("segments", [])
+            if not segments:
+                return None
+
+            z_range = data.get("metadata", {}).get("z_range", None)
+            if isinstance(z_range, list) and len(z_range) == 2:
+                z_min = float(z_range[0])
+                z_max = float(z_range[1])
+            else:
+                levels = [float(seg.get("level", 0.0)) for seg in segments]
+                if levels:
+                    z_min = float(np.min(levels))
+                    z_max = float(np.max(levels))
+                else:
+                    z_min, z_max = 0.0, 1.0
+
+            points = []
+            lines = []
+            colors = []
+
+            for segment in segments:
+                start = segment.get("start")
+                end = segment.get("end")
+                if not start or not end:
+                    continue
+
+                i0 = len(points)
+                points.append([float(start[0]), float(start[1]), float(start[2])])
+                i1 = len(points)
+                points.append([float(end[0]), float(end[1]), float(end[2])])
+                lines.append([i0, i1])
+
+                if relief_coloring:
+                    seg_z = float(segment.get("level", (start[2] + end[2]) * 0.5))
+                    colors.append(self._elevation_to_color(seg_z, z_min, z_max))
+                else:
+                    colors.append([1.0, 0.65, 0.1])
+
+            if not points or not lines:
+                return None
+
+            line_set = self.o3d.geometry.LineSet()
+            line_set.points = self.o3d.utility.Vector3dVector(np.asarray(points, dtype=np.float64))
+            line_set.lines = self.o3d.utility.Vector2iVector(np.asarray(lines, dtype=np.int32))
+            line_set.colors = self.o3d.utility.Vector3dVector(np.asarray(colors, dtype=np.float64))
+            return line_set
+
+        except Exception as e:
+            self.log_error(f"Ошибка чтения изолиний {file_path}: {e}")
+            return None
+
+    def _build_thick_lineset(self, line_set, thickness_ratio: float = 3.0):
+        """Создает более толстый вариант LineSet через дублирование линий с малыми XY-смещениями."""
+        if line_set is None:
+            return None
+
+        try:
+            points = np.asarray(line_set.points, dtype=np.float64)
+            lines = np.asarray(line_set.lines, dtype=np.int32)
+            colors = np.asarray(line_set.colors, dtype=np.float64)
+
+            if points.size == 0 or lines.size == 0:
+                return line_set
+
+            x_span = float(np.max(points[:, 0]) - np.min(points[:, 0]))
+            y_span = float(np.max(points[:, 1]) - np.min(points[:, 1]))
+            scale = max(x_span, y_span, 1.0)
+
+            ratio = max(1.0, float(thickness_ratio))
+            eps = scale * 0.0002 * ratio
+            eps = min(max(eps, 0.002), 0.2)
+
+            offsets = [
+                (0.0, 0.0),
+                (eps, 0.0),
+                (-eps, 0.0),
+                (0.0, eps),
+                (0.0, -eps),
+            ]
+
+            merged_points = []
+            merged_lines = []
+            merged_colors = []
+
+            for dx, dy in offsets:
+                base_idx = len(merged_points)
+                shifted = points.copy()
+                shifted[:, 0] += dx
+                shifted[:, 1] += dy
+                merged_points.extend(shifted.tolist())
+                merged_lines.extend((lines + base_idx).tolist())
+                merged_colors.extend(colors.tolist())
+
+            thick = self.o3d.geometry.LineSet()
+            thick.points = self.o3d.utility.Vector3dVector(np.asarray(merged_points, dtype=np.float64))
+            thick.lines = self.o3d.utility.Vector2iVector(np.asarray(merged_lines, dtype=np.int32))
+            thick.colors = self.o3d.utility.Vector3dVector(np.asarray(merged_colors, dtype=np.float64))
+            return thick
+
+        except Exception as e:
+            self.log_warning(f"Не удалось построить толстые изолинии: {e}")
+            return line_set
     
     def load_point_cloud(self, file_path: Path) -> bool:
         """
@@ -274,7 +402,10 @@ class Open3DProcessor(BaseAdapter):
         Визуализирует несколько слоев с возможностью их переключения.
 
         Управление:
-        - клавиши 1..9: включить/выключить соответствующий слой
+        - клавиши 1..9: включить/выключить слой (только в режиме облака)
+        - клавиша C: переключить режимы CLOUD <-> CONTOURS
+        - клавиша R: вкл/выкл цветной рельеф изолиний (только в режиме изолиний)
+        - клавиша T: тонкие/толстые линии изолиний (только в режиме изолиний)
         """
         if not self.is_available():
             self.log_error("Open3D недоступен")
@@ -291,7 +422,21 @@ class Open3DProcessor(BaseAdapter):
             return
 
         selected = set(selected_layers or existing_layers.keys())
-        points_by_layer = {}
+        config = get_config()
+        contour_relief_enabled = bool(
+            config.get("open3d.visualization.contour_relief_enabled", True)
+        )
+        contour_line_width_thin = float(
+            config.get("open3d.visualization.contour_line_width_thin", 1.0)
+        )
+        contour_line_width_thick = float(
+            config.get("open3d.visualization.contour_line_width_thick", 3.0)
+        )
+        contour_thickness_ratio = max(1.0, contour_line_width_thick / max(contour_line_width_thin, 0.1))
+        contour_line_width_thick_mode = False
+
+        point_geometry_by_layer = {}
+        contours_path = existing_layers.get("contours")
 
         # Базовая палитра для семантических слоев.
         layer_colors = {
@@ -304,6 +449,9 @@ class Open3DProcessor(BaseAdapter):
         }
 
         for name, path in existing_layers.items():
+            if name == "contours":
+                continue
+
             cloud = self._read_point_cloud(path)
             if cloud is None:
                 continue
@@ -315,53 +463,249 @@ class Open3DProcessor(BaseAdapter):
             if not cloud.has_colors() and name in layer_colors:
                 cloud.paint_uniform_color(layer_colors[name])
 
-            points_by_layer[name] = cloud
+            point_geometry_by_layer[name] = cloud
 
-        if not points_by_layer:
+        contour_geometry_relief = None
+        contour_geometry_flat = None
+        contour_geometry_relief_thick = None
+        contour_geometry_flat_thick = None
+        if contours_path is not None and Path(contours_path).suffix.lower() == ".json":
+            contour_geometry_relief = self._read_contours_lineset(contours_path, relief_coloring=True)
+            contour_geometry_flat = self._read_contours_lineset(contours_path, relief_coloring=False)
+
+            if contour_geometry_relief is not None:
+                contour_geometry_relief_thick = self._build_thick_lineset(
+                    contour_geometry_relief,
+                    thickness_ratio=contour_thickness_ratio,
+                )
+            if contour_geometry_flat is not None:
+                contour_geometry_flat_thick = self._build_thick_lineset(
+                    contour_geometry_flat,
+                    thickness_ratio=contour_thickness_ratio,
+                )
+
+            if contour_geometry_relief is None and contour_geometry_flat is None:
+                self.log_warning(f"Слой 'contours' не удалось загрузить: {contours_path}")
+
+        has_contours = contour_geometry_relief is not None or contour_geometry_flat is not None
+        if not point_geometry_by_layer and not has_contours:
             self.log_error("Не удалось загрузить ни один слой для визуализации")
             return
 
-        layer_names = list(points_by_layer.keys())
-        visibility = {name: (name in selected) for name in layer_names}
+        point_layer_names = list(point_geometry_by_layer.keys())
+        point_visibility = {name: (name in selected) for name in point_layer_names}
 
-        if not any(visibility.values()):
-            visibility[layer_names[0]] = True
+        if point_layer_names and not any(point_visibility.values()):
+            point_visibility[point_layer_names[0]] = True
+
+        selected_has_non_contours = any(layer_name != "contours" for layer_name in selected)
+        if has_contours and not selected_has_non_contours and "contours" in selected:
+            current_mode = "contour"
+        elif point_layer_names:
+            current_mode = "point"
+        else:
+            current_mode = "contour"
 
         try:
             vis = self.o3d.visualization.VisualizerWithKeyCallback()
             vis.create_window(window_name=title, width=1280, height=800)
 
+            def get_active_contour_geometry():
+                if contour_relief_enabled:
+                    candidate = contour_geometry_relief_thick if contour_line_width_thick_mode else contour_geometry_relief
+                else:
+                    candidate = contour_geometry_flat_thick if contour_line_width_thick_mode else contour_geometry_flat
+
+                if candidate is None:
+                    if contour_line_width_thick_mode:
+                        if contour_relief_enabled:
+                            return contour_geometry_relief_thick or contour_geometry_relief or contour_geometry_flat
+                        return contour_geometry_flat_thick or contour_geometry_flat or contour_geometry_relief
+                    if contour_relief_enabled:
+                        return contour_geometry_relief or contour_geometry_flat
+                    return contour_geometry_flat or contour_geometry_relief
+
+                return candidate
+
+            contour_geometry_current = get_active_contour_geometry()
+
+            contour_visible = False
+
+            def apply_contour_line_width() -> None:
+                if current_mode != "contour":
+                    return
+                try:
+                    render_opt = vis.get_render_option()
+                    render_opt.line_width = (
+                        contour_line_width_thick if contour_line_width_thick_mode else contour_line_width_thin
+                    )
+                except Exception:
+                    # На части бэкендов Open3D толщина линий может быть зафиксирована драйвером.
+                    pass
+
+            def add_point_layer(layer_name: str) -> None:
+                vis.add_geometry(point_geometry_by_layer[layer_name], reset_bounding_box=False)
+
+            def remove_point_layer(layer_name: str) -> None:
+                vis.remove_geometry(point_geometry_by_layer[layer_name], reset_bounding_box=False)
+
+            def set_mode(new_mode: str) -> None:
+                nonlocal current_mode, contour_visible
+                if new_mode == current_mode:
+                    return
+
+                if new_mode == "contour" and not has_contours:
+                    self.log_info("Слой 'contours' недоступен")
+                    return
+
+                if new_mode == "point" and not point_layer_names:
+                    self.log_info("Облачные слои недоступны")
+                    return
+
+                if current_mode == "point":
+                    for layer_name in point_layer_names:
+                        if point_visibility[layer_name]:
+                            remove_point_layer(layer_name)
+                elif current_mode == "contour" and contour_visible and contour_geometry_current is not None:
+                    vis.remove_geometry(contour_geometry_current, reset_bounding_box=False)
+                    contour_visible = False
+
+                if new_mode == "point":
+                    for layer_name in point_layer_names:
+                        if point_visibility[layer_name]:
+                            add_point_layer(layer_name)
+                    self.log_info("Режим визуализации: CLOUD")
+                else:
+                    if contour_geometry_current is not None:
+                        vis.add_geometry(contour_geometry_current, reset_bounding_box=False)
+                        contour_visible = True
+                        apply_contour_line_width()
+                    self.log_info("Режим визуализации: CONTOURS")
+
+                current_mode = new_mode
+
             def toggle_layer(layer_name: str):
                 def _cb(_):
-                    if visibility[layer_name]:
-                        vis.remove_geometry(points_by_layer[layer_name], reset_bounding_box=False)
+                    if current_mode != "point":
+                        self.log_info("Клавиши фильтров отключены в режиме CONTOURS")
+                        return False
+
+                    if point_visibility[layer_name]:
+                        remove_point_layer(layer_name)
                     else:
-                        vis.add_geometry(points_by_layer[layer_name], reset_bounding_box=False)
-                    visibility[layer_name] = not visibility[layer_name]
-                    state = "ON" if visibility[layer_name] else "OFF"
+                        add_point_layer(layer_name)
+                    point_visibility[layer_name] = not point_visibility[layer_name]
+                    state = "ON" if point_visibility[layer_name] else "OFF"
                     self.log_info(f"Слой '{layer_name}': {state}")
                     return False
                 return _cb
 
+            def toggle_mode(_):
+                if current_mode == "point":
+                    set_mode("contour")
+                else:
+                    set_mode("point")
+                return False
+
+            def toggle_contour_relief(_):
+                nonlocal contour_relief_enabled, contour_geometry_current, contour_visible
+
+                if current_mode != "contour":
+                    self.log_info("Клавиши изолиний отключены в режиме CLOUD")
+                    return False
+
+                if contour_geometry_relief is None or contour_geometry_flat is None:
+                    self.log_info("Цветной рельеф изолиний недоступен")
+                    return False
+
+                if contour_visible and contour_geometry_current is not None:
+                    vis.remove_geometry(contour_geometry_current, reset_bounding_box=False)
+
+                contour_relief_enabled = not contour_relief_enabled
+                contour_geometry_current = get_active_contour_geometry()
+
+                if contour_geometry_current is not None:
+                    vis.add_geometry(contour_geometry_current, reset_bounding_box=False)
+                    contour_visible = True
+
+                state = "ON" if contour_relief_enabled else "OFF"
+                self.log_info(f"Цветной рельеф изолиний: {state}")
+                return False
+
+            def toggle_contour_line_width(_):
+                nonlocal contour_line_width_thick_mode, contour_geometry_current, contour_visible
+
+                if current_mode != "contour":
+                    self.log_info("Клавиши изолиний отключены в режиме CLOUD")
+                    return False
+
+                if contour_geometry_current is None:
+                    self.log_info("Слой изолиний недоступен")
+                    return False
+
+                if contour_visible:
+                    vis.remove_geometry(contour_geometry_current, reset_bounding_box=False)
+
+                contour_line_width_thick_mode = not contour_line_width_thick_mode
+                contour_geometry_current = get_active_contour_geometry()
+
+                if contour_geometry_current is not None:
+                    vis.add_geometry(contour_geometry_current, reset_bounding_box=False)
+                    contour_visible = True
+
+                apply_contour_line_width()
+                state = "THICK" if contour_line_width_thick_mode else "THIN"
+                self.log_info(f"Толщина линий изолиний: {state}")
+                return False
+
             first_added = False
-            for idx, name in enumerate(layer_names):
-                if visibility[name]:
-                    vis.add_geometry(points_by_layer[name], reset_bounding_box=not first_added)
+            if current_mode == "point":
+                for layer_name in point_layer_names:
+                    if point_visibility[layer_name]:
+                        vis.add_geometry(
+                            point_geometry_by_layer[layer_name],
+                            reset_bounding_box=not first_added,
+                        )
+                        first_added = True
+            else:
+                if contour_geometry_current is not None:
+                    vis.add_geometry(contour_geometry_current, reset_bounding_box=not first_added)
+                    contour_visible = True
                     first_added = True
 
+            for idx, name in enumerate(point_layer_names):
                 if idx < 9:
                     vis.register_key_callback(ord(str(idx + 1)), toggle_layer(name))
 
-            config = get_config()
+            vis.register_key_callback(ord('C'), toggle_mode)
+            vis.register_key_callback(ord('c'), toggle_mode)
+            vis.register_key_callback(ord('R'), toggle_contour_relief)
+            vis.register_key_callback(ord('r'), toggle_contour_relief)
+            vis.register_key_callback(ord('T'), toggle_contour_line_width)
+            vis.register_key_callback(ord('t'), toggle_contour_line_width)
+
             show_frame = config.get("open3d.visualization.show_coordinate_frame", True)
             if show_frame:
                 frame = self.o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
                 vis.add_geometry(frame)
 
-            self.log_info("Управление слоями: 1..9 - вкл/выкл слой")
-            for idx, name in enumerate(layer_names[:9], start=1):
-                default_state = "ON" if visibility[name] else "OFF"
+            self.log_info("Управление режимами: [C] CLOUD <-> CONTOURS")
+            self.log_info("Управление CLOUD: 1..9 - вкл/выкл облачные слои")
+            for idx, name in enumerate(point_layer_names[:9], start=1):
+                default_state = "ON" if point_visibility[name] else "OFF"
                 self.log_info(f"  [{idx}] {name} ({default_state})")
+
+            if has_contours:
+                relief_state = "ON" if contour_relief_enabled else "OFF"
+                width_state = "THICK" if contour_line_width_thick_mode else "THIN"
+                self.log_info("Управление CONTOURS: [R] цветной рельеф изолиний")
+                self.log_info("Управление CONTOURS: [T] толщина линий изолиний")
+                self.log_info(f"  contours (relief={relief_state}, width={width_state})")
+
+            self.log_info(
+                "Ограничение режимов: в CONTOURS отключены клавиши фильтров, "
+                "в CLOUD отключены клавиши изолиний"
+            )
 
             vis.run()
             vis.destroy_window()

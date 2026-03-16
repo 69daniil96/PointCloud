@@ -5,8 +5,8 @@
 ## Что это
 
 Проект собирает облака точек из фото в двух режимах:
-- Наземная съемка: COLMAP -> PDAL -> Open3D
-- Съемка с дрона: ODM (Docker) -> PDAL -> Open3D
+- Наземная съемка: COLMAP -> PDAL -> Изолинии -> Open3D
+- Съемка с дрона: ODM (Docker) -> PDAL -> Изолинии -> Open3D
 
 ## Требования
 
@@ -205,10 +205,10 @@ python -m src.ui.cli process-drone data/input/drone --layers-preset quality-cont
 ```
 
 Пресеты слоев:
-- `terrain`: `final,ground`
-- `vegetation`: `final,vegetation,ground`
-- `quality-control`: `final,outliers,no_ground,no_outliers`
-- `all`: `final,ground,vegetation,outliers,no_ground,no_outliers`
+- `terrain`: `final,ground,contours`
+- `vegetation`: `final,vegetation,ground,contours`
+- `quality-control`: `final,outliers,no_ground,no_outliers,contours`
+- `all`: `final,ground,vegetation,outliers,no_ground,no_outliers,contours`
 
 Приоритет опций:
 - Если передан `--layers`, он переопределяет `--layers-preset`.
@@ -221,8 +221,45 @@ python -m src.ui.cli process-drone data/input/drone --layers-preset quality-cont
 - `outliers`
 - `no_ground`
 - `no_outliers`
+- `contours` (изолинии)
 
-В окне Open3D можно переключать видимость слоев клавишами `1..9`.
+## Гайд по клавишам визуализации
+
+Визуализация Open3D работает в двух режимах:
+- `CLOUD`: облако точек и фильтры
+- `CONTOURS`: изолинии (линии уровня)
+
+### Клавиши режима CLOUD
+
+- `1..9` - включить или выключить соответствующий слой облака точек
+- `C` - переключиться в режим `CONTOURS`
+- `R` - не работает в этом режиме
+- `T` - не работает в этом режиме
+
+Что обычно отображается в режиме `CLOUD`:
+- `final`
+- `ground`
+- `vegetation`
+- `outliers`
+- `no_ground`
+- `no_outliers`
+
+### Клавиши режима CONTOURS
+
+- `C` - переключиться обратно в режим `CLOUD`
+- `R` - включить или выключить цветной рельеф изолиний по высоте
+- `T` - переключить толщину линий изолиний: `THIN` <-> `THICK`
+- `1..9` - отключены в этом режиме
+
+Что отображается в режиме `CONTOURS`:
+- `contours` - слой изолиний
+
+### Практика использования
+
+- Если нужно анализировать отфильтрованное облако точек, работайте в режиме `CLOUD`.
+- Если нужно смотреть только линии уровня, нажмите `C` и перейдите в режим `CONTOURS`.
+- Если изолинии плохо читаются, нажмите `T`.
+- Если нужен цветовой рельеф по высоте, нажмите `R`.
 
 ## Полезные команды
 
@@ -239,11 +276,13 @@ python -m src.ui.cli process-drone --help
 - COLMAP (исходная реконструкция): `data/output/ground/colmap/reconstruction.ply`
 - PDAL (промежуточные облака): `data/output/ground/pdal/*.las`
 - Явные слои после PDAL: `*_ground.las`, `*_vegetation.las`, `*_outliers.las`, `*_no_ground.las`, `*_no_outliers.las`
+- Изолинии: `data/output/ground/contours/*_contours.json`
 - Финальный файл после Open3D: `data/output/ground/open3d/*_processed.ply`
 - Результаты дронной съемки: `data/output/drone`
 - ODM-результаты: `data/output/drone/odm/...`
 - PDAL (промежуточные облака): `data/output/drone/pdal/*.las`
 - Явные слои после PDAL: `*_ground.las`, `*_vegetation.las`, `*_outliers.las`, `*_no_ground.las`, `*_no_outliers.las`
+- Изолинии: `data/output/drone/contours/*_contours.json`
 - Финальный файл после Open3D: `data/output/drone/open3d/*_processed.ply`
 - Временные файлы: `data/temp`
 - Логи: `data/logs`

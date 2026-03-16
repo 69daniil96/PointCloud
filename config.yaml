@@ -89,6 +89,18 @@ open3d:
     point_size: 2.0
     background_color: [0.0, 0.0, 0.0]
     show_coordinate_frame: true
+    contour_relief_enabled: true  # Цветной рельеф изолиний по высоте
+    contour_line_width_thin: 1.0
+    contour_line_width_thick: 3.0
+
+# Настройки построения изолиний
+contours:
+  enabled: true
+  interval: 1.0       # Шаг изолиний по высоте, метры
+  grid_size: 0.5      # Размер ячейки сетки, метры
+  max_grid_cells: 1200000
+  random_seed: 42
+  random_shift_m: 5000.0
 
 # Логирование
 logging:
